@@ -1,0 +1,78 @@
+[
+  {
+    "id": "device-pulseband-sim",
+    "name": "PulseBand Sim",
+    "type": "wearable_sim",
+    "safetyMode": "observe_only",
+    "simulationOnly": true,
+    "capabilities": [
+      {
+        "id": "pulseband-status-read",
+        "name": "Read simulated device status",
+        "accessType": "read_status",
+        "riskLevel": "low",
+        "description": "Reads synthetic battery and connection status from the simulated wearable.",
+        "simulationOnly": true
+      },
+      {
+        "id": "pulseband-sensor-read",
+        "name": "Read synthetic pulse signal",
+        "accessType": "read_sensor",
+        "riskLevel": "medium",
+        "description": "Reads fictional pulse-like data for simulation only.",
+        "simulationOnly": true
+      }
+    ]
+  },
+  {
+    "id": "device-ar-lens-sim",
+    "name": "AR Lens Sim",
+    "type": "ar_sim",
+    "safetyMode": "human_confirmation_required",
+    "simulationOnly": true,
+    "capabilities": [
+      {
+        "id": "ar-lens-overlay-display",
+        "name": "Display simulated overlay",
+        "accessType": "display_overlay",
+        "riskLevel": "medium",
+        "description": "Displays a non-invasive simulated AR overlay.",
+        "simulationOnly": true
+      },
+      {
+        "id": "ar-lens-audit-read",
+        "name": "Read overlay audit summary",
+        "accessType": "audit_read",
+        "riskLevel": "low",
+        "description": "Reads a simulated summary of overlay decisions.",
+        "simulationOnly": true
+      }
+    ]
+  },
+  {
+    "id": "device-assistarm-sim",
+    "name": "AssistArm Sim",
+    "type": "assistive_motion_sim",
+    "safetyMode": "supervised_simulation",
+    "simulationOnly": true,
+    "capabilities": [
+      {
+        "id": "assistarm-status-read",
+        "name": "Read simulated assist state",
+        "accessType": "read_status",
+        "riskLevel": "medium",
+        "description": "Reads synthetic state from the assistive motion simulator.",
+        "simulationOnly": true
+      },
+      {
+        "id": "assistarm-motor-assist",
+        "name": "Request simulated motor assist",
+        "accessType": "motor_assist",
+        "riskLevel": "critical",
+        "description": "Represents a simulated motor-assist request with no real hardware access.",
+        "simulationOnly": true
+      }
+    ]
+  }
+]
+

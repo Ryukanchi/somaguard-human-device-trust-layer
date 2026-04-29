@@ -1,0 +1,27 @@
+[
+  {
+    "id": "app-rehabassist",
+    "name": "RehabAssist",
+    "trustLevel": "trusted",
+    "trusted": true,
+    "declaredPurpose": "Supports supervised simulation scenarios using mock device data.",
+    "simulationOnly": true
+  },
+  {
+    "id": "app-overlaycoach",
+    "name": "OverlayCoach",
+    "trustLevel": "semi_trusted",
+    "trusted": true,
+    "declaredPurpose": "Displays simulated AR coaching overlays after human confirmation.",
+    "simulationOnly": true
+  },
+  {
+    "id": "app-suspiciousoptimizer",
+    "name": "SuspiciousOptimizer",
+    "trustLevel": "untrusted",
+    "trusted": false,
+    "declaredPurpose": "Ambiguous optimization claims used for defensive policy testing.",
+    "simulationOnly": true
+  }
+]
+
