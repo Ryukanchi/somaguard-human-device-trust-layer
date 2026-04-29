@@ -69,15 +69,18 @@ export interface PolicyDecision {
 
 export interface AuditEvent {
   id: string;
-  eventType:
-    | "permission_requested"
-    | "permission_decided"
-    | "safety_mode_changed"
-    | "emergency_lock_triggered";
-  actorId: string;
-  targetId: string;
-  summary: string;
-  createdAt: string;
+  eventType: "policy_decision_recorded";
+  timestamp: string;
+  appId: string;
+  deviceId: string;
+  capabilityId: string;
+  capabilityName: string;
+  decision: PolicyDecision["decision"];
+  riskLevel: RiskLevel;
+  reason: string;
+  requiresApproval: boolean;
+  audit: boolean;
+  humanReadableSummary: string;
   simulationOnly: true;
 }
 
