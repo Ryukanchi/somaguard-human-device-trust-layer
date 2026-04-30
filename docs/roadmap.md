@@ -33,6 +33,7 @@ Deliverables:
 
 - Written scenario examples
 - Simulated device capability descriptions
+- Capability Registry v1 scope for PulseBand Sim
 - Permission and consent examples
 - Safety mode examples
 
@@ -119,4 +120,3 @@ Success criteria:
 - The defensive purpose is clear.
 - Future work is gated by safety review.
 - The project remains calm, serious, and technically grounded.
-

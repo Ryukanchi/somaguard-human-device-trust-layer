@@ -12,6 +12,18 @@ A device concept that is worn, carried close to the body, used near perception, 
 
 A specific action or function a simulated device can represent. Examples include reading simulated status, showing a simulated AR overlay, or entering a safer mode.
 
+## Capability Registry
+
+A shared list of registered simulated capabilities and their metadata, such as sensitivity, purpose, retention hint, and source device type. It gives policy, consent, audit, and scenario layers a common vocabulary.
+
+## Data Sensitivity
+
+A label for how privacy-sensitive a simulated data access may be. Body-adjacent data should not be treated as automatically low risk.
+
+## Purpose Binding
+
+The principle that future consent should be tied to a specific reason for access, not only a broad yes/no approval.
+
 ## Permission
 
 A limited approval for a requester to use a specific simulated capability. Permission should have a clear purpose and scope.
@@ -39,4 +51,3 @@ A defensive state for an app, device, or capability that should not be trusted. 
 ## Policy Engine
 
 The conceptual decision-making part of the trust layer. It evaluates permission, consent, safety mode, quarantine state, risk, and emergency lock status before a simulated action is allowed.
-
