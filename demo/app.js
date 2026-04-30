@@ -317,8 +317,8 @@ class SandboxEngine {
 
 class Orchestrator {
   constructor(policyEngine, sandboxEngine, guardian, composedRisk, selfTrustResult = {
-    trustLevel: "trusted",
-    reason: "SomaGuard self-trust is trusted by default for this simulation."
+    trustLevel: "degraded",
+    reason: "Self-trust result was not provided."
   }) {
     this.policyEngine = policyEngine;
     this.sandboxEngine = sandboxEngine;

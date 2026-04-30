@@ -33,8 +33,8 @@ export class Orchestrator {
     private readonly guardian: GuardianAnalyzer,
     private readonly composedRisk: ComposedRiskEvaluator,
     private readonly selfTrustResult: SelfTrustResult = {
-      trustLevel: "trusted",
-      reason: "SomaGuard self-trust is trusted by default for this simulation."
+      trustLevel: "degraded",
+      reason: "Self-trust result was not provided."
     }
   ) {}
 

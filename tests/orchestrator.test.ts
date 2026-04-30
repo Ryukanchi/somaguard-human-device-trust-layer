@@ -31,6 +31,11 @@ const device: Device = {
   simulationOnly: true
 };
 
+const trustedSelfTrust: SelfTrustResult = {
+  trustLevel: "trusted",
+  reason: "All expected components are present."
+};
+
 function capability(riskLevel: RiskLevel): DeviceCapability {
   return {
     id: `cap-${riskLevel}`,
@@ -111,7 +116,8 @@ describe("Orchestrator", () => {
         mode: "allowed",
         reason: "Low-risk simulated request was allowed.",
         simulated: true
-      }
+      },
+      selfTrustResult: trustedSelfTrust
     });
 
     const finalDecision = orchestrator.handle(request("low"));
@@ -127,7 +133,8 @@ describe("Orchestrator", () => {
         mode: "sandboxed",
         reason: "Medium-risk simulated request requires containment.",
         simulated: true
-      }
+      },
+      selfTrustResult: trustedSelfTrust
     });
 
     const finalDecision = orchestrator.handle(request("medium"));
@@ -147,7 +154,8 @@ describe("Orchestrator", () => {
       guardian: {
         flagged: true,
         reason: "Risk escalation detected."
-      }
+      },
+      selfTrustResult: trustedSelfTrust
     });
 
     const finalDecision = orchestrator.handle(request("low"));
@@ -167,7 +175,8 @@ describe("Orchestrator", () => {
       composedRisk: {
         riskLevel: "critical",
         reason: "Composed risk escalated to critical."
-      }
+      },
+      selfTrustResult: trustedSelfTrust
     });
 
     const finalDecision = orchestrator.handle(request("low"));
@@ -191,7 +200,8 @@ describe("Orchestrator", () => {
       composedRisk: {
         riskLevel: "critical",
         reason: "Composed risk escalated to critical."
-      }
+      },
+      selfTrustResult: trustedSelfTrust
     });
 
     const finalDecision = orchestrator.handle(request("high"));
@@ -257,10 +267,7 @@ describe("Orchestrator", () => {
         reason: "Low-risk simulated request was allowed.",
         simulated: true
       },
-      selfTrustResult: {
-        trustLevel: "trusted",
-        reason: "All expected components are present."
-      }
+      selfTrustResult: trustedSelfTrust
     });
 
     const finalDecision = orchestrator.handle(request("low"));
@@ -301,7 +308,8 @@ describe("Orchestrator", () => {
           riskLevel: "low",
           reason: "Composed risk is low."
         })
-      }
+      },
+      trustedSelfTrust
     );
 
     const finalDecision = orchestrator.handle(request("low"));
@@ -309,5 +317,38 @@ describe("Orchestrator", () => {
     expect(finalDecision.mode).toBe("allowed");
     expect(policyCalls).toBe(1);
     expect(sandboxSawSharedDecision).toBe(true);
+  });
+
+  it("missing selfTrustResult defaults to degraded", () => {
+    const orchestrator = buildOrchestrator({
+      policy: policyDecision({ decision: "allow", riskLevel: "medium" }),
+      sandbox: {
+        mode: "sandboxed",
+        reason: "Medium-risk simulated request requires containment.",
+        simulated: true
+      }
+    });
+
+    const finalDecision = orchestrator.handle(request("medium"));
+
+    expect(finalDecision.mode).toBe("sandboxed");
+    expect(finalDecision.reason).toContain("Self-trust result was not provided.");
+  });
+
+  it("missing selfTrustResult does not fully allow high-risk requests", () => {
+    const orchestrator = buildOrchestrator({
+      policy: policyDecision({ decision: "allow", riskLevel: "high" }),
+      sandbox: {
+        mode: "sandboxed",
+        reason: "High-risk simulated request requires containment.",
+        simulated: true
+      }
+    });
+
+    const finalDecision = orchestrator.handle(request("high"));
+
+    expect(finalDecision.mode).not.toBe("allowed");
+    expect(finalDecision.mode).toBe("sandboxed");
+    expect(finalDecision.reason).toContain("self-trust is degraded");
   });
 });
