@@ -243,6 +243,11 @@ select:focus-visible {
   color: var(--accent-strong);
 }
 
+.consent-valid,
+.decision-allowed {
+  color: #70e6a2;
+}
+
 .trust-trusted {
   color: #70e6a2;
 }
@@ -256,6 +261,11 @@ select:focus-visible {
 }
 
 .risk-medium {
+  color: var(--warning);
+}
+
+.decision-sandboxed,
+.consent-invalid {
   color: var(--warning);
 }
 

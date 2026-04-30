@@ -44,8 +44,8 @@ function logDecision(request, decision, auditLog) {
   return event;
 }
 
-function createDecisionContext(request, policyEngine) {
-  const decision = policyEngine(request);
+function createDecisionContext(request, policyEngine, context = {}) {
+  const decision = policyEngine(request, context);
 
   return {
     request,
@@ -53,7 +53,7 @@ function createDecisionContext(request, policyEngine) {
   };
 }
 
-function evaluatePermission(request) {
+function evaluatePermission(request, context = {}) {
   const { app, capability, device } = request;
 
   if (capability.riskLevel === "critical") {
@@ -92,6 +92,18 @@ function evaluatePermission(request) {
     );
   }
 
+  const isKnown = getCapabilityById(request.capabilityId) !== undefined;
+  const hasValidConsent =
+    !capabilityRequiresConsent(request.capabilityId) || context.consentValid === true;
+  const isTrustedSystem = context.selfTrust?.trustLevel === "trusted";
+
+  if (isKnown && hasValidConsent && isTrustedSystem) {
+    return allow(
+      request,
+      "Valid consent, known capability, and trusted system."
+    );
+  }
+
   return deny(request, "No allow rule matched, so the request is denied by default.");
 }
 
@@ -119,58 +131,6 @@ function allow(request, reason) {
     humanReadableSummary: `Allowed ${request.app.name} access to ${request.capability.name} on ${request.device.name}: ${reason}`,
     simulationOnly: true
   };
-}
-
-class ScenarioEngine {
-  constructor(policyEngine, auditLog) {
-    this.policyEngine = policyEngine;
-    this.auditLog = auditLog;
-  }
-
-  runScenario(scenario) {
-    const decisions = [];
-    const auditEvents = [];
-
-    for (const step of scenario.steps) {
-      const decision = this.policyEngine(step.request);
-      const event = logDecision(step.request, decision, this.auditLog);
-      decisions.push(decision);
-      auditEvents.push(event);
-    }
-
-    const flagReason = detectScenarioFlag(scenario, decisions);
-
-    return {
-      decisions,
-      auditEvents,
-      flagged: flagReason !== null,
-      flagReason
-    };
-  }
-}
-
-function detectScenarioFlag(scenario, decisions) {
-  if (scenario.steps.some((step) => step.request.capability.riskLevel === "critical")) {
-    return "critical interaction detected: scenario includes a critical capability request.";
-  }
-
-  if (decisions.some((decision) => decision.decision === "deny" && decision.riskLevel === "high")) {
-    return "blocked high-risk attempt: at least one high-risk request was denied.";
-  }
-
-  let consecutive = 0;
-  for (const decision of decisions) {
-    if (decision.riskLevel === "medium" || decision.riskLevel === "high") {
-      consecutive += 1;
-      if (consecutive >= 2) {
-        return "risk accumulation: multiple medium or high risk actions occurred in sequence.";
-      }
-    } else {
-      consecutive = 0;
-    }
-  }
-
-  return null;
 }
 
 class Guardian {
@@ -327,61 +287,132 @@ class Orchestrator {
     this.selfTrustResult = selfTrustResult;
   }
 
-  handle(request) {
-    const context = createDecisionContext(request, this.policyEngine);
-
+  handle(request, options = {}) {
     if (this.selfTrustResult.trustLevel === "compromised") {
-      return {
+      return withoutConsent({
         mode: "denied",
         reason: `System self-trust is compromised, so SomaGuard denies the request before other decisions: ${this.selfTrustResult.reason}`
-      };
+      });
     }
 
+    const consentResult = evaluateConsent(createConsentInput(request, options.consent));
+
+    if (consentResult.decision === "unknown_capability") {
+      return withConsent({
+        mode: "denied",
+        reason: `Consent denied unknown capability using fail-closed behavior: ${consentResult.reason}`
+      }, consentResult);
+    }
+
+    if (consentResult.decision === "missing") {
+      return withConsent({
+        mode: "requiresApproval",
+        reason: `Consent is missing for this simulated capability request: ${consentResult.reason}`
+      }, consentResult);
+    }
+
+    if (consentResult.decision === "revoked") {
+      return withConsent({
+        mode: "denied",
+        reason: `Consent was revoked for this simulated capability request: ${consentResult.reason}`
+      }, consentResult);
+    }
+
+    if (consentResult.decision === "expired") {
+      return withConsent({
+        mode: "denied",
+        reason: `Consent expired for this simulated capability request: ${consentResult.reason}`
+      }, consentResult);
+    }
+
+    if (consentResult.decision === "purpose_mismatch") {
+      return withConsent({
+        mode: "denied",
+        reason: `Consent purpose mismatch blocked this simulated request: ${consentResult.reason}`
+      }, consentResult);
+    }
+
+    const context = createDecisionContext(request, this.policyEngine, {
+      consentValid: consentResult.valid,
+      selfTrust: this.selfTrustResult
+    });
     const { policyDecision } = context;
+
     const sandboxDecision = this.sandboxEngine.execute(context);
     const guardianResult = this.guardian.analyze();
     const composedRiskResult = this.composedRisk.evaluate();
 
     if (policyDecision.decision === "deny") {
-      return {
+      return withConsent({
         mode: "denied",
         reason: `Policy denied the request: ${policyDecision.reason}`
-      };
+      }, consentResult);
     }
 
     if (this.selfTrustResult.trustLevel === "degraded" && policyDecision.riskLevel !== "low") {
-      return {
+      return withConsent({
         mode: "sandboxed",
         reason: `System self-trust is degraded, so non-low-risk requests cannot be fully allowed: ${this.selfTrustResult.reason}`
-      };
+      }, consentResult);
     }
 
     if (composedRiskResult.riskLevel === "critical") {
-      return {
+      return withConsent({
         mode: "requiresApproval",
         reason: `Composed risk requires explicit approval: ${composedRiskResult.reason}`
-      };
+      }, consentResult);
     }
 
     if (guardianResult.flagged) {
-      return {
+      return withConsent({
         mode: "sandboxed",
         reason: `Guardian flagged the request history, so execution is contained: ${guardianResult.reason}`
-      };
+      }, consentResult);
     }
 
     if (sandboxDecision.mode === "sandboxed") {
-      return {
+      return withConsent({
         mode: "sandboxed",
         reason: `Sandbox containment selected: ${sandboxDecision.reason}`
-      };
+      }, consentResult);
     }
 
-    return {
+    return withConsent({
       mode: "allowed",
-      reason: "Policy allowed the request, Guardian did not flag history, composed risk is not critical, and sandbox did not require containment."
-    };
+      reason: "Policy allowed the request, consent gate passed, Guardian did not flag history, composed risk is not critical, and sandbox did not require containment."
+    }, consentResult);
   }
+}
+
+function createConsentInput(request, consentOptions = {}) {
+  return {
+    subjectId: consentOptions.subjectId ?? "simulated-human",
+    appId: request.appId,
+    capabilityId: request.capabilityId,
+    purpose: consentOptions.purpose ?? request.purpose,
+    now: consentOptions.now ?? request.createdAt,
+    grants: consentOptions.consentGrants ?? []
+  };
+}
+
+function withConsent(decision, consentResult) {
+  return {
+    ...decision,
+    consentDecision: consentResult.decision,
+    consentValid: consentResult.valid,
+    consentReason: consentResult.reason,
+    consentSummary: consentResult.humanReadableSummary
+  };
+}
+
+function withoutConsent(decision) {
+  return {
+    ...decision,
+    consentDecision: null,
+    consentValid: null,
+    consentReason: null,
+    consentSummary: null
+  };
 }
 
 function evaluateSelfTrust(input) {
@@ -408,10 +439,229 @@ function evaluateSelfTrust(input) {
   };
 }
 
+const registeredCapabilities = {
+  read_heart_rate: {
+    id: "read_heart_rate",
+    displayName: "Read heart rate",
+    accessType: "read",
+    riskLevel: "high",
+    dataSensitivity: "highly_sensitive",
+    bodyImpact: "informational",
+    requiresConsent: true,
+    allowedPurposes: [
+      "user_view",
+      "wellness_summary",
+      "rehab_tracking",
+      "safety_monitoring",
+      "research_simulation"
+    ],
+    retentionHint: "not_recommended",
+    sourceDeviceTypes: ["wearable_health_sensor"]
+  },
+  read_battery: {
+    id: "read_battery",
+    displayName: "Read battery",
+    accessType: "read",
+    riskLevel: "low",
+    dataSensitivity: "low",
+    bodyImpact: "none",
+    requiresConsent: false,
+    allowedPurposes: ["device_maintenance"],
+    retentionHint: "ephemeral",
+    sourceDeviceTypes: ["wearable_health_sensor"]
+  }
+};
+
+function getCapabilityById(capabilityId) {
+  return registeredCapabilities[capabilityId];
+}
+
+function isPurposeAllowed(capabilityId, purpose) {
+  const capability = getCapabilityById(capabilityId);
+  return capability !== undefined && capability.allowedPurposes.includes(purpose);
+}
+
+function capabilityRequiresConsent(capabilityId) {
+  const capability = getCapabilityById(capabilityId);
+  return capability === undefined ? true : capability.requiresConsent;
+}
+
+function createConsentGrant(input) {
+  return {
+    id: [
+      "consent",
+      input.subjectId,
+      input.appId,
+      input.capabilityId,
+      input.purpose,
+      input.grantedAt
+    ].join(":"),
+    subjectId: input.subjectId,
+    appId: input.appId,
+    capabilityId: input.capabilityId,
+    purpose: input.purpose,
+    status: "active",
+    grantedAt: input.grantedAt,
+    expiresAt: input.expiresAt ?? null,
+    revokedAt: null,
+    humanReadableSummary: `Simulated consent grant for ${input.subjectId} allowing ${input.appId} to use ${input.capabilityId} for ${input.purpose}.`
+  };
+}
+
+function revokeConsentGrant(grant, revokedAt) {
+  return {
+    ...grant,
+    status: "revoked",
+    revokedAt,
+    humanReadableSummary: `${grant.humanReadableSummary} Revoked at ${revokedAt}.`
+  };
+}
+
+function isConsentExpired(grant, now) {
+  return grant.status === "expired" || (grant.expiresAt !== null && grant.expiresAt < now);
+}
+
+function findMatchingConsentGrant(input) {
+  return input.grants.find(
+    (grant) =>
+      grant.subjectId === input.subjectId &&
+      grant.appId === input.appId &&
+      grant.capabilityId === input.capabilityId &&
+      grant.purpose === input.purpose
+  );
+}
+
+function findGrantForDifferentPurpose(input) {
+  return input.grants.find(
+    (grant) =>
+      grant.subjectId === input.subjectId &&
+      grant.appId === input.appId &&
+      grant.capabilityId === input.capabilityId &&
+      grant.purpose !== input.purpose
+  );
+}
+
+function consentResult(input) {
+  return {
+    ...input,
+    humanReadableSummary: `${input.decision}: ${input.reason}`
+  };
+}
+
+function evaluateConsent(input) {
+  const capability = getCapabilityById(input.capabilityId);
+
+  if (capability === undefined) {
+    return consentResult({
+      decision: "unknown_capability",
+      valid: false,
+      requiresConsent: true,
+      matchingGrantId: null,
+      capabilityId: input.capabilityId,
+      purpose: input.purpose,
+      reason: "Capability is not registered, so consent evaluation fails closed."
+    });
+  }
+
+  const requiresConsent = capabilityRequiresConsent(input.capabilityId);
+
+  if (!requiresConsent) {
+    return consentResult({
+      decision: "capability_does_not_require_consent",
+      valid: true,
+      requiresConsent: false,
+      matchingGrantId: null,
+      capabilityId: input.capabilityId,
+      purpose: input.purpose,
+      reason: `${input.capabilityId} does not require consent in the simulation registry.`
+    });
+  }
+
+  if (!isPurposeAllowed(input.capabilityId, input.purpose)) {
+    return consentResult({
+      decision: "purpose_mismatch",
+      valid: false,
+      requiresConsent: true,
+      matchingGrantId: null,
+      capabilityId: input.capabilityId,
+      purpose: input.purpose,
+      reason: `${input.purpose} is not an allowed purpose for ${input.capabilityId}.`
+    });
+  }
+
+  const matchingGrant = findMatchingConsentGrant(input);
+
+  if (matchingGrant !== undefined) {
+    if (matchingGrant.status === "revoked") {
+      return consentResult({
+        decision: "revoked",
+        valid: false,
+        requiresConsent: true,
+        matchingGrantId: matchingGrant.id,
+        capabilityId: input.capabilityId,
+        purpose: input.purpose,
+        reason: "Matching simulated consent grant has been revoked."
+      });
+    }
+
+    if (isConsentExpired(matchingGrant, input.now)) {
+      return consentResult({
+        decision: "expired",
+        valid: false,
+        requiresConsent: true,
+        matchingGrantId: matchingGrant.id,
+        capabilityId: input.capabilityId,
+        purpose: input.purpose,
+        reason: "Matching simulated consent grant is expired."
+      });
+    }
+
+    return consentResult({
+      decision: "valid",
+      valid: true,
+      requiresConsent: true,
+      matchingGrantId: matchingGrant.id,
+      capabilityId: input.capabilityId,
+      purpose: input.purpose,
+      reason: "Matching active simulated consent grant is valid for this capability and purpose."
+    });
+  }
+
+  const differentPurposeGrant = findGrantForDifferentPurpose(input);
+
+  if (differentPurposeGrant !== undefined) {
+    return consentResult({
+      decision: "purpose_mismatch",
+      valid: false,
+      requiresConsent: true,
+      matchingGrantId: differentPurposeGrant.id,
+      capabilityId: input.capabilityId,
+      purpose: input.purpose,
+      reason: `A grant exists for ${input.capabilityId}, but not for requested purpose ${input.purpose}.`
+    });
+  }
+
+  return consentResult({
+    decision: "missing",
+    valid: false,
+    requiresConsent: true,
+    matchingGrantId: null,
+    capabilityId: input.capabilityId,
+    purpose: input.purpose,
+    reason: `No matching active simulated consent grant exists for ${input.capabilityId} and purpose ${input.purpose}.`
+  });
+}
+
 const apps = {
   rehabAssist: {
     id: "app-rehabassist",
     name: "RehabAssist",
+    trustLevel: "trusted",
+    trusted: true
+  },
+  deviceMaintenance: {
+    id: "app-device-maintenance",
+    name: "DeviceMaintenance",
     trustLevel: "trusted",
     trusted: true
   },
@@ -427,37 +677,38 @@ const devices = {
   pulseBand: {
     id: "device-pulseband-sim",
     name: "PulseBand Sim",
-    safetyMode: "observe_only"
-  },
-  assistArm: {
-    id: "device-assistarm-sim",
-    name: "AssistArm Sim",
+    type: "wearable_health_sensor",
     safetyMode: "observe_only"
   }
 };
 
 const capabilities = {
-  status: {
-    id: "pulseband-status-read",
-    name: "Read simulated status",
-    accessType: "read_status",
+  heartRate: {
+    id: "read_heart_rate",
+    name: "Read heart rate",
+    accessType: "read",
+    riskLevel: "high"
+  },
+  battery: {
+    id: "read_battery",
+    name: "Read battery",
+    accessType: "read",
     riskLevel: "low"
   },
-  sensor: {
-    id: "pulseband-sensor-read",
-    name: "Read synthetic signal",
-    accessType: "read_sensor",
-    riskLevel: "medium"
-  },
-  assist: {
-    id: "assistarm-motor-assist",
-    name: "Request simulated motor assist",
-    accessType: "motor_assist",
-    riskLevel: "critical"
+  unknownSignal: {
+    id: "read_unknown_signal",
+    name: "Read unknown signal",
+    accessType: "read",
+    riskLevel: "high"
   }
 };
 
-function makeRequest(id, app, device, capability) {
+const demoSubjectId = "simulated-human";
+const demoNow = "2026-01-01T12:00:00.000Z";
+const demoGrantedAt = "2026-01-01T09:00:00.000Z";
+const demoExpiredAt = "2025-12-31T12:00:00.000Z";
+
+function makeRequest(id, app, device, capability, purpose) {
   return {
     id,
     appId: app.id,
@@ -467,46 +718,126 @@ function makeRequest(id, app, device, capability) {
     device,
     capability,
     requestedAccessType: capability.accessType,
-    purpose: "SomaGuard browser demo.",
-    createdAt: "2026-04-29T00:00:00.000Z",
+    purpose,
+    createdAt: demoNow,
     simulationOnly: true
   };
 }
 
+const activeHeartRateGrant = createConsentGrant({
+  subjectId: demoSubjectId,
+  appId: apps.rehabAssist.id,
+  capabilityId: "read_heart_rate",
+  purpose: "wellness_summary",
+  grantedAt: demoGrantedAt,
+  expiresAt: "2026-01-02T12:00:00.000Z"
+});
+
+const revokedHeartRateGrant = revokeConsentGrant(
+  createConsentGrant({
+    subjectId: demoSubjectId,
+    appId: apps.rehabAssist.id,
+    capabilityId: "read_heart_rate",
+    purpose: "wellness_summary",
+    grantedAt: demoGrantedAt,
+    expiresAt: "2026-01-02T12:00:00.000Z"
+  }),
+  "2026-01-01T10:00:00.000Z"
+);
+
+const expiredHeartRateGrant = createConsentGrant({
+  subjectId: demoSubjectId,
+  appId: apps.rehabAssist.id,
+  capabilityId: "read_heart_rate",
+  purpose: "wellness_summary",
+  grantedAt: "2025-12-30T12:00:00.000Z",
+  expiresAt: demoExpiredAt
+});
+
+const wellnessOnlyGrantForSuspiciousApp = createConsentGrant({
+  subjectId: demoSubjectId,
+  appId: apps.suspiciousOptimizer.id,
+  capabilityId: "read_heart_rate",
+  purpose: "wellness_summary",
+  grantedAt: demoGrantedAt,
+  expiresAt: "2026-01-02T12:00:00.000Z"
+});
+
 const scenarios = {
-  "safe-flow": {
-    id: "safe-flow",
-    name: "Safe Flow",
+  "valid-consent-heart-rate": {
+    id: "valid-consent-heart-rate",
+    name: "Valid Consent — Heart Rate Wellness",
+    summary: "RehabAssist requests a simulated PulseBand heart-rate signal for a wellness summary with an active matching consent grant.",
+    consentGrants: [activeHeartRateGrant],
     steps: [
       {
-        request: makeRequest("safe-1", apps.rehabAssist, devices.pulseBand, capabilities.status)
-      },
-      {
-        request: makeRequest("safe-2", apps.rehabAssist, devices.pulseBand, capabilities.status)
+        request: makeRequest("valid-consent-1", apps.rehabAssist, devices.pulseBand, capabilities.heartRate, "wellness_summary")
       }
     ]
   },
-  "risk-accumulation": {
-    id: "risk-accumulation",
-    name: "Risk Accumulation",
+  "missing-consent-heart-rate": {
+    id: "missing-consent-heart-rate",
+    name: "Missing Consent — Heart Rate Wellness",
+    summary: "RehabAssist requests the same simulated heart-rate capability, but no matching consent grant is present.",
+    consentGrants: [],
     steps: [
       {
-        request: makeRequest("risk-1", apps.rehabAssist, devices.pulseBand, capabilities.status)
-      },
-      {
-        request: makeRequest("risk-2", apps.rehabAssist, devices.pulseBand, capabilities.sensor)
-      },
-      {
-        request: makeRequest("risk-3", apps.rehabAssist, devices.pulseBand, capabilities.sensor)
+        request: makeRequest("missing-consent-1", apps.rehabAssist, devices.pulseBand, capabilities.heartRate, "wellness_summary")
       }
     ]
   },
-  "critical-attempt": {
-    id: "critical-attempt",
-    name: "Critical Attempt",
+  "revoked-consent": {
+    id: "revoked-consent",
+    name: "Revoked Consent",
+    summary: "A matching consent grant exists, but it has been revoked before the request is evaluated.",
+    consentGrants: [revokedHeartRateGrant],
     steps: [
       {
-        request: makeRequest("critical-1", apps.suspiciousOptimizer, devices.assistArm, capabilities.assist)
+        request: makeRequest("revoked-consent-1", apps.rehabAssist, devices.pulseBand, capabilities.heartRate, "wellness_summary")
+      }
+    ]
+  },
+  "expired-consent": {
+    id: "expired-consent",
+    name: "Expired Consent",
+    summary: "A matching consent grant exists, but its expiration time is before the deterministic demo time.",
+    consentGrants: [expiredHeartRateGrant],
+    steps: [
+      {
+        request: makeRequest("expired-consent-1", apps.rehabAssist, devices.pulseBand, capabilities.heartRate, "wellness_summary")
+      }
+    ]
+  },
+  "purpose-mismatch-advertising": {
+    id: "purpose-mismatch-advertising",
+    name: "Purpose Mismatch — Advertising Attempt",
+    summary: "SuspiciousOptimizer asks for a highly sensitive simulated signal for advertising. The registry does not allow advertising for this capability.",
+    consentGrants: [wellnessOnlyGrantForSuspiciousApp],
+    steps: [
+      {
+        request: makeRequest("purpose-mismatch-1", apps.suspiciousOptimizer, devices.pulseBand, capabilities.heartRate, "advertising")
+      }
+    ]
+  },
+  "battery-diagnostics": {
+    id: "battery-diagnostics",
+    name: "Non-Consent Capability — Battery Diagnostics",
+    summary: "DeviceMaintenance reads a low-risk simulated battery status for device maintenance. The registry marks this capability as not requiring consent.",
+    consentGrants: [],
+    steps: [
+      {
+        request: makeRequest("battery-diagnostics-1", apps.deviceMaintenance, devices.pulseBand, capabilities.battery, "device_maintenance")
+      }
+    ]
+  },
+  "unknown-capability": {
+    id: "unknown-capability",
+    name: "Unknown Capability — Fail Closed",
+    summary: "SuspiciousOptimizer requests an unregistered simulated signal. Unknown capabilities fail closed at the consent gate.",
+    consentGrants: [],
+    steps: [
+      {
+        request: makeRequest("unknown-capability-1", apps.suspiciousOptimizer, devices.pulseBand, capabilities.unknownSignal, "wellness_summary")
       }
     ]
   }
@@ -514,11 +845,16 @@ const scenarios = {
 
 const auditLog = new AuditLog();
 const expectedComponents = [
+  "audit-log",
+  "capability-registry",
+  "consent-engine",
+  "decision-context",
   "policy-engine",
   "sandbox",
   "guardian",
   "composed-risk",
-  "orchestrator"
+  "orchestrator",
+  "self-trust"
 ];
 
 const elements = {
@@ -527,6 +863,12 @@ const elements = {
   runButton: document.querySelector("#run-button"),
   trustLevel: document.querySelector("#trust-level"),
   trustReason: document.querySelector("#trust-reason"),
+  scenarioName: document.querySelector("#scenario-name"),
+  scenarioSummary: document.querySelector("#scenario-summary"),
+  requestSummary: document.querySelector("#request-summary"),
+  requestDetail: document.querySelector("#request-detail"),
+  consentDecision: document.querySelector("#consent-decision"),
+  consentReason: document.querySelector("#consent-reason"),
   finalDecision: document.querySelector("#final-decision"),
   finalReason: document.querySelector("#final-reason"),
   guardianResult: document.querySelector("#guardian-result"),
@@ -541,23 +883,26 @@ function runSelectedScenario() {
   const selfTrustResult = evaluateSelfTrust(createSelfTrustInput(elements.trustSelect.value));
   auditLog.clear();
 
-  const scenarioEngine = new ScenarioEngine(evaluatePermission, auditLog);
-  scenarioEngine.runScenario(scenario);
-
   const guardian = new Guardian(auditLog);
   const composedRisk = new ComposedRiskEngine(auditLog);
-  const sandboxLog = new AuditLog();
-  const sandboxEngine = new SandboxEngine(sandboxLog);
+  const sandboxEngine = new SandboxEngine(auditLog);
   const orchestrator = new Orchestrator(evaluatePermission, sandboxEngine, guardian, composedRisk, selfTrustResult);
   const lastRequest = scenario.steps[scenario.steps.length - 1].request;
-  const finalDecision = orchestrator.handle(lastRequest);
+  const finalDecision = orchestrator.handle(lastRequest, {
+    consent: {
+      subjectId: demoSubjectId,
+      purpose: lastRequest.purpose,
+      now: demoNow,
+      consentGrants: scenario.consentGrants
+    }
+  });
 
   const guardianResult = guardian.analyze();
   const composedRiskResult = composedRisk.evaluate();
 
   renderSelfTrust(selfTrustResult);
-  renderResults(finalDecision, guardianResult, composedRiskResult);
-  renderAuditLog(auditLog.getAll().concat(sandboxLog.getAll()));
+  renderResults(scenario, lastRequest, finalDecision, guardianResult, composedRiskResult);
+  renderAuditLog(auditLog.getAll());
 }
 
 function createSelfTrustInput(mode) {
@@ -590,7 +935,24 @@ function renderSelfTrust(selfTrustResult) {
   elements.trustReason.textContent = selfTrustResult.reason;
 }
 
-function renderResults(finalDecision, guardianResult, composedRiskResult) {
+function renderResults(scenario, request, finalDecision, guardianResult, composedRiskResult) {
+  elements.scenarioName.textContent = scenario.name;
+  elements.scenarioSummary.textContent = scenario.summary;
+
+  elements.requestSummary.textContent = `${request.app.name} → ${request.capability.id}`;
+  elements.requestDetail.textContent = [
+    `appId=${request.appId}`,
+    `capability=${request.capabilityId}`,
+    `purpose=${request.purpose}`,
+    `risk=${request.capability.riskLevel}`
+  ].join(" · ");
+
+  const consentLabel = finalDecision.consentDecision ?? "not_evaluated";
+  const consentValid = finalDecision.consentValid === null ? "unknown" : String(finalDecision.consentValid);
+  elements.consentDecision.textContent = `${consentLabel} · valid=${consentValid}`;
+  elements.consentDecision.className = finalDecision.consentValid ? "consent-valid" : "consent-invalid";
+  elements.consentReason.textContent = finalDecision.consentSummary ?? "Consent was not evaluated because the request was stopped before the consent gate.";
+
   elements.finalDecision.textContent = finalDecision.mode;
   elements.finalDecision.className = `decision-${finalDecision.mode}`;
   elements.finalReason.textContent = finalDecision.reason;

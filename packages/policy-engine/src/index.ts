@@ -3,6 +3,11 @@ import type {
   PolicyDecision,
   RiskLevel
 } from "../../core-types/src/index.js";
+import {
+  isKnownCapability,
+  requiresConsent
+} from "../../capability-registry/src/index.js";
+import type { PolicyEvaluationContext } from "../../decision-context/src/index.js";
 
 function isHighOrCritical(riskLevel: RiskLevel): boolean {
   return riskLevel === "high" || riskLevel === "critical";
@@ -39,7 +44,10 @@ function allow(request: PermissionRequest, reason: string): PolicyDecision {
   };
 }
 
-export function evaluatePermission(request: PermissionRequest): PolicyDecision {
+export function evaluatePermission(
+  request: PermissionRequest,
+  context: PolicyEvaluationContext = {}
+): PolicyDecision {
   const { app, capability, device } = request;
 
   if (capability.riskLevel === "critical") {
@@ -68,6 +76,18 @@ export function evaluatePermission(request: PermissionRequest): PolicyDecision {
     return allow(
       request,
       "The app is trusted and the requested simulated capability is low risk."
+    );
+  }
+
+  const isKnown = isKnownCapability(request.capabilityId);
+  const hasValidConsent =
+    !requiresConsent(request.capabilityId) || context.consentValid === true;
+  const isTrustedSystem = context.selfTrust?.trustLevel === "trusted";
+
+  if (isKnown && hasValidConsent && isTrustedSystem) {
+    return allow(
+      request,
+      "Valid consent, known capability, and trusted system."
     );
   }
 

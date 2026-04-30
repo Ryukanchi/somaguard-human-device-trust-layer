@@ -25,9 +25,13 @@
           <div class="control-field">
             <label for="scenario-select">Scenario</label>
             <select id="scenario-select">
-              <option value="safe-flow">Safe Flow</option>
-              <option value="risk-accumulation">Risk Accumulation</option>
-              <option value="critical-attempt">Critical Attempt</option>
+              <option value="valid-consent-heart-rate">Valid Consent — Heart Rate Wellness</option>
+              <option value="missing-consent-heart-rate">Missing Consent — Heart Rate Wellness</option>
+              <option value="revoked-consent">Revoked Consent</option>
+              <option value="expired-consent">Expired Consent</option>
+              <option value="purpose-mismatch-advertising">Purpose Mismatch — Advertising Attempt</option>
+              <option value="battery-diagnostics">Non-Consent Capability — Battery Diagnostics</option>
+              <option value="unknown-capability">Unknown Capability — Fail Closed</option>
             </select>
           </div>
           <div class="control-field">
@@ -56,6 +60,21 @@
           <section class="panel results-panel" aria-labelledby="results-heading">
             <h2 id="results-heading">Results Panel</h2>
             <div class="result-list">
+              <article class="result-row">
+                <span>Scenario</span>
+                <strong id="scenario-name">Not run</strong>
+                <p id="scenario-summary">Select a scenario and run it.</p>
+              </article>
+              <article class="result-row">
+                <span>Request</span>
+                <strong id="request-summary">Not run</strong>
+                <p id="request-detail">No request evaluated yet.</p>
+              </article>
+              <article class="result-row">
+                <span>Consent Decision</span>
+                <strong id="consent-decision">Not run</strong>
+                <p id="consent-reason">No consent evaluation has run yet.</p>
+              </article>
               <article class="result-row">
                 <span>Final Decision</span>
                 <strong id="final-decision">Not run</strong>
